@@ -1,0 +1,189 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+# Pr??paration des donn??es
+
+```{r}
+list.of.packages <- c("ggplot2", "Rcpp","IRdisplay","dplyr","leaflet",
+                      "leaflet.extras","gridExtra")
+new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
+if(length(new.packages)) install.packages(new.packages)
+
+# Chargement du dataset
+df_taxi = read.csv("http://perso.esiee.fr/~coviller/NY_taxi.csv")
+
+#df_taxi = read.csv("NY_taxi.csv")
+
+# Chargement des packages n??cessaires
+library(IRdisplay)
+library(dplyr)
+library(leaflet)
+library(leaflet.extras)
+library(ggplot2)
+require(gridExtra)
+
+```
+
+```{r}
+head(df_taxi)
+
+# On extrait le mois de la course (on consid??re le mois du d??part)
+df_taxi$month <- as.numeric(format(strptime(df_taxi$pickup_datetime,format = '%Y-%m-%d'), "%m"))
+noms_mois = c("01"="Janvier","02"="F??vrier","03"="Mars","04"="Avril","05"="Mai","06"="Juin","07"="Juillet")
+df_taxi$month <- noms_mois[df_taxi$month]
+df_taxi$month <- ordered(df_taxi$month, levels = c("Janvier","F??vrier","Mars","Avril","Mai","Juin","Juillet"))
+
+# L'heure de la course
+df_taxi$hour <- as.numeric(format(strptime(df_taxi$pickup_datetime,format = '%Y-%m-%d %H:%M:%S'), "%H"))
+
+# Le jour de la semaine correspondant
+df_taxi$weekday <- weekdays(as.Date(df_taxi$pickup_datetime))
+df_taxi$weekday <- ordered(df_taxi$weekday, levels = c("Lundi","Mardi","Mercredi","Jeudi","Vendredi","Samedi","Dimanche"))
+
+## Suppression des colonnes inutiles
+#df_taxi$pickup_datetime<- NULL
+#df_taxi$dropoff_datetime<- NULL
+#df_taxi$store_and_fwd_flag<- NULL
+
+
+## Cr??ation de l'objet tibble (facilite la manipulation des donn??es)
+tbl_taxi = as_tibble(df_taxi)
+
+glimpse(tbl_taxi)
+```
+# Traitement des donn??es
+## I - Evolution des temps de trajet
+
+Dans les grandes villes comme New York o?? le traffic routier est dense, la dur??e d'un trajet ne d??pendra pas seulement de la distance parcourue: la p??riode influera ??norm??ment. Examinons donc la dur??e des trajets selon la p??riode ?? laquelle ils commencent.
+
+```{r}
+duration_evolution <- function(periode){
+
+    mean_duration_evolution <- df_taxi %>% group_by(periode) %>% summarise(mean(trip_duration))
+    median_duration_evolution <- df_taxi %>% group_by(periode) %>% summarise(median(trip_duration))
+    
+    
+    mean_duration_evolution
+    median_duration_evolution
+}
+
+# Evolution par mois
+mean_duration_month <- df_taxi %>% group_by(month) %>% summarise(m=mean(trip_duration))
+median_duration_month <- df_taxi %>% group_by(month) %>% summarise(m=median(trip_duration))
+
+# Evolution par hour
+mean_duration_hour <- df_taxi %>% group_by(hour) %>% summarise(m=mean(trip_duration))
+median_duration_hour <- df_taxi %>% group_by(hour) %>% summarise(m=median(trip_duration))
+
+# Evolution par weekday
+mean_duration_weekday <- df_taxi %>% group_by(weekday) %>% summarise(m=mean(trip_duration))
+median_duration_weekday <- df_taxi %>% group_by(weekday) %>% summarise(m=median(trip_duration))
+
+pm <- ggplot() + geom_point(aes(y = m, x = month, colour = "green"),data = mean_duration_month, stat="identity")+ 
+    geom_point(aes(y = m, x = month, colour = "blue"),data = median_duration_month, stat="identity")
+
+pw <- ggplot() + geom_line(aes(y = m, x = hour, colour = "green"),data = mean_duration_hour, stat="identity")+ 
+    geom_line(aes(y = m, x = hour, colour = "blue"),data = median_duration_hour, stat="identity")
+
+ph <- ggplot() + geom_point(aes(y = m, x = weekday, colour = "green"),data = mean_duration_weekday, stat="identity")+ 
+    geom_point(aes(y = m, x = weekday, colour = "blue"),data = median_duration_weekday, stat="identity")
+
+grid.arrange(pm,pw,ncol=2)
+ph
+```
+
+## II - Repartition des trajets dans le temps
+Comme on a pu le voir pr??cedemment, le temps de trajet ??volue selon les p??riodes car le traffic routier varie. Si le traffic routier est plus dense ?? certaines p??riodes, c'est que les trajets ne sont pas r??partis ??quitablementsur celles-ci. 
+
+Examinons donc comment les trajets de taxis New Yorkais sont r??partis.
+
+```{r}
+repartition_month <- df_taxi %>% group_by(month) %>% summarise(Trajets=n())
+repartition_weekday <- df_taxi %>% group_by(weekday) %>% summarise(Trajets=n())
+repartition_hour <- df_taxi %>% group_by(hour) %>% summarise(Trajets=n())
+
+
+pm <-ggplot(data=repartition_month, aes(x=month, y=Trajets)) + geom_bar(stat="identity",fill = "purple") + 
+    theme(axis.text.x = element_text(angle = 90, hjust = 1))
+pw <-ggplot(data=repartition_weekday, aes(x=weekday, y=Trajets)) + geom_bar(stat="identity",fill = "blue") + 
+    theme(axis.text.x = element_text(angle = 90, hjust = 1))
+ph <-ggplot(data=repartition_hour, aes(x=hour, y=Trajets)) + geom_bar(stat="identity",fill = "green") +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+
+grid.arrange(pm,pw,ncol=2)
+ph
+```
+## III - R??partition des pickup et dropoff selon les compagnies
+
+```{r}
+vendor1_pick = tbl_taxi %>% filter(vendor_id == 1) %>% select(pickup_latitude,pickup_longitude)
+vendor1_drop = tbl_taxi %>% filter(vendor_id == 1) %>% select(dropoff_latitude,dropoff_longitude)
+
+vendor2_pick = tbl_taxi %>% filter(vendor_id == 2) %>% select(pickup_latitude,pickup_longitude)
+vendor2_drop = tbl_taxi %>% filter(vendor_id == 2) %>% select(dropoff_latitude,dropoff_longitude)
+
+pv <- ggplot() + ggtitle("Taxis verts") + 
+geom_point(data=vendor1_pick, aes(y=pickup_latitude,x=pickup_longitude), color="red") +
+geom_point(data=vendor1_drop, aes(y=dropoff_latitude,x=dropoff_longitude), color="blue")
+
+pj <- ggplot() + ggtitle("Taxis jaunes") + 
+geom_point(data=vendor2_pick, aes(y=pickup_latitude,x=pickup_longitude), color="red") +
+geom_point(data=vendor2_drop, aes(y=dropoff_latitude,x=dropoff_longitude), color="blue")
+
+pv
+pj
+```
+
+## IV -  Passagers et compagnie 
+
+Il ??xiste deux types de taxis ?? New York: verts (1) et jaunes (2). Voici la r??partitions des trajets sur ces deux compagnies, selon le nombre de passagers.
+
+```{r}
+vendors_passeng = df_taxi %>% group_by(vendor_id,passenger_count) %>% summarise(n=n())
+vendors_passeng1 = vendors_passeng %>% filter(vendor_id == 1)
+vendors_passeng2 = vendors_passeng %>% filter(vendor_id == 2)
+
+p1 <-ggplot(data=vendors_passeng1, aes(x=passenger_count, y=n)) + geom_bar(stat="identity",fill = "purple") + 
+    theme(axis.text.x = element_text(angle = 90, hjust = 1))
+p2 <-ggplot(data=vendors_passeng2, aes(x=passenger_count, y=n)) + geom_bar(stat="identity",fill = "blue") + 
+    theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+grid.arrange(p1,p2,ncol=2)
+```
+
+```{r}
+# On choisit le mois avec le plus de trajets
+mois = "Mars"
+
+# On s??lectionne les trajets du mois
+trips_mois <- tbl_taxi %>% filter(month == mois) %>% select(ends_with("longitude"),ends_with("latitude"))
+
+# On d??termine le nombre de pickup/dropoff pour chaque position (lat,lng)
+pickup_trips_mois <- trips_mois %>% group_by(pickup_longitude,pickup_latitude) %>% summarise(n=n())
+dropoff_trips_mois <- trips_mois %>% group_by(dropoff_longitude,dropoff_latitude) %>% summarise(n=n())
+
+# On cr??e les deux heat map
+hm_pickup <- leaflet(pickup_trips_mois) %>% addProviderTiles(providers$CartoDB.DarkMatter) %>%
+addHeatmap(lng = ~pickup_longitude, lat = ~pickup_latitude, intensity = ~n, blur = 20, max = 0.05, radius = 15)
+
+hm_dropoff <- leaflet(dropoff_trips_mois) %>% addProviderTiles(providers$CartoDB.DarkMatter) %>%
+addHeatmap(lng = ~dropoff_longitude, lat = ~dropoff_latitude, intensity = ~n, blur = 20, max = 0.05, radius = 15)
+
+```
+#### Pickups
+
+```{r}
+#htmlwidgets::saveWidget(hm_pickup, "pick.html")
+#display_html('<iframe src="pick.html" width=100% height=450></iframe>')
+hm_pickup
+```
+#### Dropoffs
+
+```{r}
+#htmlwidgets::saveWidget(hm_dropoff, "drop.html")
+#display_html('<iframe src="drop.html" width=100% height=450></iframe>')
+hm_dropoff
+```
+
